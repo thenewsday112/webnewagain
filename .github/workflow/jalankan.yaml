@@ -1,0 +1,98 @@
+name: Scraping dan Export Otomatis
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04          # ✅ FIX: stabil, hindari masalah lxml di Ubuntu 24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout kode
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      # ============ DEBUG: lihat isi repo ============
+      - name: Debug - lihat isi repo
+        run: |
+          echo "=== Files di root ==="
+          ls -la
+          echo ""
+          echo "=== Isi requirements.txt ==="
+          cat requirements.txt || echo "requirements.txt TIDAK ADA"
+          echo ""
+          echo "=== 30 baris pertama deepseekposisi1.py ==="
+          head -30 deepseekposisi1.py || echo "deepseekposisi1.py TIDAK ADA"
+          echo ""
+          echo "=== 30 baris pertama exportgeminictr.py ==="
+          head -30 exportgeminictr.py || echo "exportgeminictr.py TIDAK ADA"
+
+      # ============ INSTALL DEPENDENCIES ============
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # Fallback jika requirements.txt kurang
+          pip install feedparser requests beautifulsoup4 lxml python-dateutil bleach
+          # Verifikasi
+          python -c "import feedparser, requests, bleach, lxml, bs4; print('✅ Packages OK')"
+
+      # ============ CEK SYNTAX PYTHON ============
+      - name: Debug - cek syntax Python
+        run: |
+          python -m py_compile deepseekposisi1.py && echo "✅ deepseekposisi1.py syntax OK"
+          python -m py_compile exportgeminictr.py && echo "✅ exportgeminictr.py syntax OK"
+
+      # ============ 1. SCRAPING ============
+      - name: Jalankan Scraping
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: python deepseekposisi1.py
+        continue-on-error: true      # ✅ FIX: workflow lanjut walau scraping gagal
+
+      # ============ CEK DB SETELAH SCRAPING ============
+      - name: Debug - cek database setelah scraping
+        run: |
+          echo "=== Cari file .sqlite / .db ==="
+          find . -name "*.sqlite" -o -name "*.db" 2>/dev/null || echo "Tidak ada DB"
+          echo ""
+          echo "=== Isi folder database_5menit/ (jika ada) ==="
+          ls -la database_5menit/ 2>/dev/null || echo "Folder database_5menit TIDAK ADA"
+          echo ""
+          echo "=== Isi folder output/ (jika ada) ==="
+          ls -la output/ 2>/dev/null || echo "Folder output TIDAK ADA"
+
+      # ============ 2. EXPORT ============
+      - name: Jalankan Export HTML
+        run: python exportgeminictr.py
+
+      # ============ UPLOAD ARTIFACT ============
+      - name: Upload hasil HTML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: output-html
+          path: output/
+          retention-days: 3
+
+      # ============ 3. COMMIT & PUSH ============
+      - name: Commit dan Push Perubahan
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --staged --quiet && echo "Tidak ada perubahan" && exit 0
+          git commit -m "Update otomatis dari GitHub Actions [skip ci]"
+          git pull --rebase origin main || true
+          git push
